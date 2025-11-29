@@ -1,0 +1,5 @@
+{
+  "name": "DataScrape France",
+  "description": "Application professionnelle de scraping et d'enrichissement de données B2B pour les entreprises françaises. Simulation de collecte multi-sources (Web, Pappers, LinkedIn) avec export CRM.",
+  "requestFramePermissions": []
+}
