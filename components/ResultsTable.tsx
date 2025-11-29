@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { CompanyData, EmailStatus } from '../types';
-import { Search, Download, Filter, ExternalLink, Copy, Check, AlertTriangle, XCircle, Mail, User } from 'lucide-react';
+import { Search, Download, Filter, ExternalLink, Copy, Check, AlertTriangle, XCircle, Mail, User, Linkedin, Facebook, Instagram } from 'lucide-react';
 
 interface ResultsTableProps {
   data: CompanyData[];
@@ -41,31 +41,31 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    // Idéalement ajouter un petit toast de confirmation ici
   };
 
   const exportCSV = () => {
-    const headers = ["Entreprise", "Emails", "Téléphone", "Dirigeant", "Statut", "Site Web", "Ville", "Secteur", "Score"];
+    const headers = ["Entreprise", "Emails", "Téléphone", "Dirigeant", "LinkedIn", "Facebook", "Instagram", "Site Web", "Ville", "Secteur", "Score"];
     const rows = filteredData.map(c => [
-      `"${c.name}"`, // Guillemets pour protéger les virgules dans les noms
-      // MODIFICATION ICI : On joint tous les emails avec un point-virgule
-      `"${c.emails.map(e => e.address).join(' ; ')}"`, 
+      `"${c.name}"`,
+      `"${c.emails.map(e => e.address).join(' ; ')}"`,
       `"${c.phone || ''}"`,
       `"${c.contactName || ''}"`,
-      c.emailStatus,
+      c.socials.linkedin || "",
+      c.socials.facebook || "",
+      c.socials.instagram || "",
       c.website || "",
       c.city,
       c.sector,
       c.qualityScore
     ]);
     
-    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" // BOM pour Excel
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" 
       + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
     
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `export_leads_${new Date().toISOString().slice(0,10)}.csv`);
+    link.setAttribute("download", `export_leads_social_${new Date().toISOString().slice(0,10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -148,7 +148,7 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
               <th className="p-4">Entreprise</th>
               <th className="p-4">Contacts</th>
               <th className="p-4">Statut</th>
-              <th className="p-4">Détails</th>
+              <th className="p-4">Détails & Réseaux</th>
               <th className="p-4 text-center">Score</th>
               <th className="p-4 text-right">Actions</th>
             </tr>
@@ -176,15 +176,12 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                   {company.siren && <div className="text-slate-500 text-[10px] mt-0.5">SIREN: {company.siren}</div>}
                 </td>
                 <td className="p-4 align-top">
-                  {/* AFFICHAGE DU DIRIGEANT */}
                   {company.contactName && (
                     <div className="flex items-center gap-2 mb-2 text-primary-300">
                         <User size={12} />
                         <span className="font-medium">{company.contactName}</span>
                     </div>
                   )}
-                  
-                  {/* MODIFICATION ICI : BOUCLE SUR TOUS LES EMAILS */}
                   {company.emails.length > 0 ? (
                     <div className="space-y-1">
                       {company.emails.map((email, idx) => (
@@ -198,8 +195,6 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                   ) : (
                     <span className="text-slate-500 text-xs italic">Aucun email</span>
                   )}
-                  
-                  {/* Affichage du téléphone s'il existe */}
                   {company.phone && (
                       <div className="text-slate-400 text-xs mt-2 flex items-center gap-2">
                           <span className="bg-slate-700 px-1.5 py-0.5 rounded text-[10px]">TEL</span>
@@ -220,13 +215,31 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
                   )}
                   {(company.emailStatus === EmailStatus.INVALID || company.emailStatus === EmailStatus.UNKNOWN) && (
                     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-700 text-slate-400 border border-slate-600">
-                      <XCircle size={12} /> {company.emailStatus === EmailStatus.UNKNOWN ? 'Inconnu' : 'Invalide'}
+                      <XCircle size={12} /> Inconnu
                     </span>
                   )}
                 </td>
-                <td className="p-4 align-top text-xs text-slate-400 space-y-1">
-                   <div>{company.sector}</div>
-                   <div>{company.city}</div>
+                <td className="p-4 align-top">
+                   <div className="text-xs text-slate-400 mb-2">{company.city}</div>
+                   
+                   {/* ICONS RESEAUX SOCIAUX */}
+                   <div className="flex gap-2">
+                      {company.socials.linkedin && (
+                        <a href={company.socials.linkedin} target="_blank" rel="noopener noreferrer" className="p-1.5 bg-blue-600/10 text-blue-500 hover:bg-blue-600 hover:text-white rounded transition-colors" title="LinkedIn">
+                          <Linkedin size={14} />
+                        </a>
+                      )}
+                      {company.socials.facebook && (
+                        <a href={company.socials.facebook} target="_blank" rel="noopener noreferrer" className="p-1.5 bg-blue-800/10 text-blue-700 hover:bg-blue-800 hover:text-white rounded transition-colors" title="Facebook">
+                          <Facebook size={14} />
+                        </a>
+                      )}
+                      {company.socials.instagram && (
+                        <a href={company.socials.instagram} target="_blank" rel="noopener noreferrer" className="p-1.5 bg-pink-600/10 text-pink-500 hover:bg-pink-600 hover:text-white rounded transition-colors" title="Instagram">
+                          <Instagram size={14} />
+                        </a>
+                      )}
+                   </div>
                 </td>
                 <td className="p-4 align-top text-center">
                     <div className={`inline-block px-2 py-1 rounded-lg border text-xs font-bold ${getScoreColor(company.qualityScore)}`}>

@@ -51,9 +51,9 @@ async function autoScroll(page, maxResults) {
     }, maxResults);
 }
 
-// Fonction 2 : Le Chasseur Amélioré (Scan HTML + Mailto)
+// Fonction 2 : Le Chasseur Amélioré (Scan HTML + Mailto + Socials)
 async function scrapeCompanyWebsite(browser, url) {
-    if (!url || url.includes('google') || url.includes('facebook')) return { emails: [], source: 'N/A' };
+    if (!url || url.includes('google') || url.includes('facebook')) return { emails: [], socials: {}, source: 'N/A' };
     
     let page;
     try {
@@ -61,62 +61,59 @@ async function scrapeCompanyWebsite(browser, url) {
         await page.setUserAgent(new UserAgent({ deviceCategory: 'desktop' }).toString());
         await page.setViewport({ width: 1366, height: 768 });
         
-        console.log(`[WEBSITE] 🔍 Visite approfondie : ${url}`);
-        
-        // Timeout 15s
+        console.log(`[WEBSITE] 🔍 Visite : ${url}`);
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
-        // --- NOUVELLE LOGIQUE D'EXTRACTION ---
-        const extractedEmails = await page.evaluate(() => {
-            const found = new Set();
+        // --- SCAN UNIQUE (EMAILS + SOCIALS) ---
+        const scanResult = await page.evaluate(() => {
+            const emailSet = new Set();
+            const socialMap = {};
             const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
-            // 1. Chercher spécifiquement les liens "mailto:" (Le plus fiable)
-            // C'est ce qui manquait pour "Artisans d'Avenir"
-            const mailtoLinks = document.querySelectorAll('a[href^="mailto:"]');
-            mailtoLinks.forEach(link => {
-                const href = link.href;
-                // On nettoie "mailto:toto@gmail.com?subject=..."
-                const email = href.replace(/^mailto:/i, '').split('?')[0];
-                if (email) found.add(email);
+            // Analyse de tous les liens de la page
+            document.querySelectorAll('a').forEach(a => {
+                const href = a.href;
+                
+                // 1. Socials
+                if (href.includes('linkedin.com/company') || href.includes('linkedin.com/in')) socialMap.linkedin = href;
+                if (href.includes('facebook.com') && !href.includes('sharer')) socialMap.facebook = href;
+                if (href.includes('instagram.com')) socialMap.instagram = href;
+
+                // 2. Mailto
+                if (href.startsWith('mailto:')) {
+                     const email = href.replace(/^mailto:/i, '').split('?')[0];
+                     if (email) emailSet.add(email);
+                }
             });
 
-            // 2. Scanner le texte visible (Classique)
-            const textContent = document.body.innerText;
-            const textMatches = textContent.match(emailRegex) || [];
-            textMatches.forEach(e => found.add(e));
+            // 3. Texte visible
+            (document.body.innerText.match(emailRegex) || []).forEach(e => emailSet.add(e));
+            
+            // 4. HTML brut (pour les attributs cachés)
+            (document.body.innerHTML.match(emailRegex) || []).forEach(e => emailSet.add(e));
 
-            // 3. Scanner TOUT le code HTML (Pour trouver les aria-labels, meta tags, etc.)
-            // Attention : peut ramener des faux positifs dans les scripts, on filtrera après
-            const htmlContent = document.body.innerHTML;
-            const htmlMatches = htmlContent.match(emailRegex) || [];
-            htmlMatches.forEach(e => found.add(e));
-
-            return Array.from(found);
+            return { 
+                emails: Array.from(emailSet), 
+                socials: socialMap 
+            };
         });
 
-        let emails = [...new Set(extractedEmails)];
-        
-        // Si toujours rien, on tente la page contact
+        let emails = [...new Set(scanResult.emails)];
+        let socials = scanResult.socials;
+
+        // Si pas d'email, on check la page contact (mais on garde les réseaux sociaux déjà trouvés)
         if (emails.length === 0) {
             try {
                 const contactLink = await page.$('a[href*="contact"]');
                 if (contactLink) {
-                    console.log(`[WEBSITE] ➡️ Clic vers page Contact...`);
                     await contactLink.click();
                     await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 }).catch(()=>{});
                     
-                    // On refait le même scan complet sur la page contact
                     const contactData = await page.evaluate(() => {
                         const s = new Set();
                         const r = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-                        
-                        document.querySelectorAll('a[href^="mailto:"]').forEach(l => {
-                            s.add(l.href.replace(/^mailto:/i, '').split('?')[0]);
-                        });
-                        
+                        document.querySelectorAll('a[href^="mailto:"]').forEach(l => s.add(l.href.replace(/^mailto:/i, '').split('?')[0]));
                         (document.body.innerText.match(r) || []).forEach(e => s.add(e));
-                        
                         return Array.from(s);
                     });
                     emails = [...new Set([...emails, ...contactData])];
@@ -124,26 +121,23 @@ async function scrapeCompanyWebsite(browser, url) {
             } catch (err) {}
         }
 
-        // --- FILTRAGE FINAL ---
-        // On retire les fausses extensions d'images qui ressemblent à des emails (ex: logo@2x.png)
-        // On retire les emails techniques (sentry, wix, etc.)
+        // Nettoyage
         emails = emails.filter(e => {
             const isImage = e.match(/\.(png|jpg|jpeg|gif|css|js|webp|svg|woff|ttf)$/i);
-            const isJunk = e.includes('sentry') || e.includes('noreply') || e.includes('domain.com') || e.includes('example');
+            const isJunk = e.includes('sentry') || e.includes('noreply') || e.includes('domain') || e.includes('example') || e.includes('wixpress');
             return !isImage && !isJunk;
         });
 
         await page.close();
-        console.log(`[WEBSITE] ✅ ${emails.length} emails trouvés pour ${url}`);
-        return { emails, source: 'Website' };
+        return { emails, socials, source: 'Website' };
 
     } catch (error) {
         if (page) await page.close();
-        return { emails: [], source: 'Error' };
+        return { emails: [], socials: {}, source: 'Error' };
     }
 }
 
-// Fonction 3 : Enrichissement Légal (Gardée en complément)
+// Fonction 3 : Enrichissement Légal
 async function getLegalInfo(name, city) {
     try {
         const cleanName = name.replace(/[\(\)-]/g, ' ').trim();
@@ -164,17 +158,15 @@ async function getLegalInfo(name, city) {
                 dirigeant: dirigeant !== "" ? dirigeant : undefined
             };
         }
-    } catch (error) {
-        // Silencieux
-    }
+    } catch (error) {}
     return null;
 }
 
-// --- ROUTE PRINCIPALE ---
+// --- ROUTE ---
 
 app.post('/api/scrape', async (req, res) => {
     const { sector, location, maxResults = 5 } = req.body;
-    console.log(`[SCRAPER V3] 🚀 Cible : ${sector} à ${location}`);
+    console.log(`[SOCIAL SCRAPER] 🚀 Cible : ${sector} à ${location}`);
 
     let browser;
     try {
@@ -186,7 +178,6 @@ app.post('/api/scrape', async (req, res) => {
         const page = await browser.newPage();
         await page.setUserAgent(new UserAgent({ deviceCategory: 'desktop' }).toString());
 
-        // 1. RECHERCHE MAPS
         const query = `${sector} ${location}`;
         const mapUrl = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
         
@@ -209,13 +200,12 @@ app.post('/api/scrape', async (req, res) => {
             }).filter(l => l !== null);
         }, maxResults);
 
-        console.log(`[MAPS] ${placesLinks.length} fiches récupérées.`);
+        console.log(`[MAPS] ${placesLinks.length} fiches.`);
         
         const enrichedResults = [];
 
         for (const link of placesLinks) {
             try {
-                // 2. EXTRACTION FICHE MAPS
                 await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 20000 });
                 const data = await page.evaluate(() => {
                     const name = document.querySelector('h1')?.innerText || "Inconnu";
@@ -227,33 +217,34 @@ app.post('/api/scrape', async (req, res) => {
                 });
 
                 let companyEmails = [];
+                let companySocials = {};
                 let legalInfo = null;
 
-                // 3. VISITE SITE WEB (Nouveau scan puissant)
                 if (data.website) {
                     const webData = await scrapeCompanyWebsite(browser, data.website);
                     companyEmails = webData.emails;
+                    companySocials = webData.socials; // On récupère les réseaux !
                 }
 
-                // 4. ENRICHISSEMENT LEGAL
                 legalInfo = await getLegalInfo(data.name, location);
 
-                // SCORE
                 let score = 30;
                 if (data.phone) score += 10;
                 if (data.website) score += 10;
                 if (companyEmails.length > 0) score += 30;
-                if (legalInfo && legalInfo.dirigeant) score += 20;
+                if (legalInfo && legalInfo.dirigeant) score += 10;
+                if (Object.keys(companySocials).length > 0) score += 10; // Bonus pour les réseaux
 
                 enrichedResults.push({
-                    id: `FULL-${Date.now()}-${Math.random()}`,
+                    id: `SOC-${Date.now()}-${Math.random()}`,
                     name: legalInfo?.legalName || data.name,
                     sector: sector,
                     city: location,
                     address: legalInfo?.address || location,
                     website: data.website,
-                    emails: companyEmails.map(e => ({ address: e, type: 'Web/HTML', confidence: 90 })),
+                    emails: companyEmails.map(e => ({ address: e, type: 'Web', confidence: 90 })),
                     phone: data.phone,
+                    socials: companySocials, // On renvoie les réseaux ici
                     contactName: legalInfo?.dirigeant, 
                     contactRole: "Dirigeant",
                     siren: legalInfo?.siren,
@@ -265,7 +256,7 @@ app.post('/api/scrape', async (req, res) => {
             } catch (err) {
                 console.error(`Skipped: ${err.message}`);
             }
-            await delay(500); 
+            await delay(500);
         }
 
         await browser.close();
@@ -279,5 +270,5 @@ app.post('/api/scrape', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Server V3 (HTML Deep Scan) running on http://localhost:${PORT}`);
+    console.log(`SocialScraper running on http://localhost:${PORT}`);
 });
