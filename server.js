@@ -5,6 +5,12 @@ import AdblockerPlugin from 'puppeteer-extra-plugin-adblocker';
 import UserAgent from 'user-agents';
 import cors from 'cors';
 import axios from 'axios';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Nécessaire pour gérer les chemins en module ES
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Activation de la furtivité
 puppeteer.use(StealthPlugin());
@@ -12,22 +18,17 @@ puppeteer.use(AdblockerPlugin({ blockTrackers: true }));
 
 const app = express();
 
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type']
-}));
-
+app.use(cors()); // CORS simplifié pour le déploiement
 app.use(express.json());
+
+// --- SERVIR LE FRONTEND (AJOUT IMPORTANT) ---
+// Le serveur va distribuer les fichiers du dossier 'dist' (le site React construit)
+app.use(express.static(path.join(__dirname, 'dist')));
 
 const PORT = process.env.PORT || 3001;
 
 // --- FONCTIONS UTILITAIRES ---
-
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
-
-// Regex améliorée
-const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 // Fonction 1 : Scroller Maps
 async function autoScroll(page, maxResults) {
@@ -61,67 +62,35 @@ async function scrapeCompanyWebsite(browser, url) {
         await page.setUserAgent(new UserAgent({ deviceCategory: 'desktop' }).toString());
         await page.setViewport({ width: 1366, height: 768 });
         
-        console.log(`[WEBSITE] 🔍 Visite : ${url}`);
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        // Timeout réduit pour la production
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
 
-        // --- SCAN UNIQUE (EMAILS + SOCIALS) ---
         const scanResult = await page.evaluate(() => {
             const emailSet = new Set();
             const socialMap = {};
             const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
-            // Analyse de tous les liens de la page
             document.querySelectorAll('a').forEach(a => {
                 const href = a.href;
-                
-                // 1. Socials
                 if (href.includes('linkedin.com/company') || href.includes('linkedin.com/in')) socialMap.linkedin = href;
                 if (href.includes('facebook.com') && !href.includes('sharer')) socialMap.facebook = href;
                 if (href.includes('instagram.com')) socialMap.instagram = href;
 
-                // 2. Mailto
                 if (href.startsWith('mailto:')) {
                      const email = href.replace(/^mailto:/i, '').split('?')[0];
                      if (email) emailSet.add(email);
                 }
             });
 
-            // 3. Texte visible
             (document.body.innerText.match(emailRegex) || []).forEach(e => emailSet.add(e));
-            
-            // 4. HTML brut (pour les attributs cachés)
             (document.body.innerHTML.match(emailRegex) || []).forEach(e => emailSet.add(e));
 
-            return { 
-                emails: Array.from(emailSet), 
-                socials: socialMap 
-            };
+            return { emails: Array.from(emailSet), socials: socialMap };
         });
 
         let emails = [...new Set(scanResult.emails)];
-        let socials = scanResult.socials;
-
-        // Si pas d'email, on check la page contact (mais on garde les réseaux sociaux déjà trouvés)
-        if (emails.length === 0) {
-            try {
-                const contactLink = await page.$('a[href*="contact"]');
-                if (contactLink) {
-                    await contactLink.click();
-                    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 }).catch(()=>{});
-                    
-                    const contactData = await page.evaluate(() => {
-                        const s = new Set();
-                        const r = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-                        document.querySelectorAll('a[href^="mailto:"]').forEach(l => s.add(l.href.replace(/^mailto:/i, '').split('?')[0]));
-                        (document.body.innerText.match(r) || []).forEach(e => s.add(e));
-                        return Array.from(s);
-                    });
-                    emails = [...new Set([...emails, ...contactData])];
-                }
-            } catch (err) {}
-        }
-
-        // Nettoyage
+        
+        // Filtrage basique
         emails = emails.filter(e => {
             const isImage = e.match(/\.(png|jpg|jpeg|gif|css|js|webp|svg|woff|ttf)$/i);
             const isJunk = e.includes('sentry') || e.includes('noreply') || e.includes('domain') || e.includes('example') || e.includes('wixpress');
@@ -129,7 +98,7 @@ async function scrapeCompanyWebsite(browser, url) {
         });
 
         await page.close();
-        return { emails, socials, source: 'Website' };
+        return { emails, socials: scanResult.socials, source: 'Website' };
 
     } catch (error) {
         if (page) await page.close();
@@ -142,7 +111,7 @@ async function getLegalInfo(name, city) {
     try {
         const cleanName = name.replace(/[\(\)-]/g, ' ').trim();
         const query = `${cleanName} ${city}`;
-        const response = await axios.get(`https://recherche-entreprises.api.gouv.fr/search?q=${encodeURIComponent(query)}&limit=1&mtm_campaign=datascrape-demo`);
+        const response = await axios.get(`https://recherche-entreprises.api.gouv.fr/search?q=${encodeURIComponent(query)}&limit=1`);
         
         if (response.data.results && response.data.results.length > 0) {
             const company = response.data.results[0];
@@ -162,17 +131,31 @@ async function getLegalInfo(name, city) {
     return null;
 }
 
-// --- ROUTE ---
+// --- API ROUTES ---
 
 app.post('/api/scrape', async (req, res) => {
     const { sector, location, maxResults = 5 } = req.body;
-    console.log(`[SOCIAL SCRAPER] 🚀 Cible : ${sector} à ${location}`);
+    
+    // Limite stricte pour la démo/prod gratuite
+    const safeMaxResults = Math.min(maxResults, 15); 
+
+    console.log(`[SCRAPER] 🚀 ${sector} à ${location} (${safeMaxResults} max)`);
 
     let browser;
     try {
         browser = await puppeteer.launch({
             headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security', '--window-size=1920,1080']
+            // Arguments vitaux pour faire tourner Chrome sur Docker/Render
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-gpu'
+            ],
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
         });
 
         const page = await browser.newPage();
@@ -184,12 +167,12 @@ app.post('/api/scrape', async (req, res) => {
         await page.goto(mapUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
         try {
-            const btn = await page.waitForSelector('button[aria-label="Tout refuser"], button[aria-label="Reject all"]', { timeout: 3000 });
+            const btn = await page.waitForSelector('button[aria-label="Tout refuser"], button[aria-label="Reject all"]', { timeout: 4000 });
             if (btn) await btn.click();
         } catch (e) {}
 
         await page.waitForSelector('div[role="feed"]', { timeout: 15000 });
-        await autoScroll(page, maxResults);
+        await autoScroll(page, safeMaxResults);
         await delay(1000);
 
         const placesLinks = await page.evaluate((max) => {
@@ -198,10 +181,8 @@ app.post('/api/scrape', async (req, res) => {
                 const link = item.querySelector('a');
                 return link ? link.href : null;
             }).filter(l => l !== null);
-        }, maxResults);
+        }, safeMaxResults);
 
-        console.log(`[MAPS] ${placesLinks.length} fiches.`);
-        
         const enrichedResults = [];
 
         for (const link of placesLinks) {
@@ -223,7 +204,7 @@ app.post('/api/scrape', async (req, res) => {
                 if (data.website) {
                     const webData = await scrapeCompanyWebsite(browser, data.website);
                     companyEmails = webData.emails;
-                    companySocials = webData.socials; // On récupère les réseaux !
+                    companySocials = webData.socials;
                 }
 
                 legalInfo = await getLegalInfo(data.name, location);
@@ -233,7 +214,7 @@ app.post('/api/scrape', async (req, res) => {
                 if (data.website) score += 10;
                 if (companyEmails.length > 0) score += 30;
                 if (legalInfo && legalInfo.dirigeant) score += 10;
-                if (Object.keys(companySocials).length > 0) score += 10; // Bonus pour les réseaux
+                if (Object.keys(companySocials).length > 0) score += 10;
 
                 enrichedResults.push({
                     id: `SOC-${Date.now()}-${Math.random()}`,
@@ -244,7 +225,7 @@ app.post('/api/scrape', async (req, res) => {
                     website: data.website,
                     emails: companyEmails.map(e => ({ address: e, type: 'Web', confidence: 90 })),
                     phone: data.phone,
-                    socials: companySocials, // On renvoie les réseaux ici
+                    socials: companySocials,
                     contactName: legalInfo?.dirigeant, 
                     contactRole: "Dirigeant",
                     siren: legalInfo?.siren,
@@ -256,7 +237,6 @@ app.post('/api/scrape', async (req, res) => {
             } catch (err) {
                 console.error(`Skipped: ${err.message}`);
             }
-            await delay(500);
         }
 
         await browser.close();
@@ -269,6 +249,12 @@ app.post('/api/scrape', async (req, res) => {
     }
 });
 
+// --- ROUTE PAR DÉFAUT POUR REACT ---
+// Toutes les requêtes qui ne sont pas /api/scrape sont renvoyées vers l'index.html de React
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
 app.listen(PORT, () => {
-    console.log(`SocialScraper running on http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
