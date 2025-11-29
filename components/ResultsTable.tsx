@@ -43,29 +43,41 @@ const ResultsTable: React.FC<ResultsTableProps> = ({ data }) => {
     navigator.clipboard.writeText(text);
   };
 
+  // --- CORRECTION DU BUG D'EXPORT ---
   const exportCSV = () => {
     const headers = ["Entreprise", "Emails", "Téléphone", "Dirigeant", "LinkedIn", "Facebook", "Instagram", "Site Web", "Ville", "Secteur", "Score"];
+    
+    // Fonction pour échapper correctement les champs CSV (gère les guillemets et virgules)
+    const escapeCsv = (field: string | undefined | null) => {
+        if (!field) return "";
+        // On remplace les guillemets doubles par des doubles guillemets doubles (standard CSV)
+        return `"${String(field).replace(/"/g, '""')}"`;
+    };
+
     const rows = filteredData.map(c => [
-      `"${c.name}"`,
-      `"${c.emails.map(e => e.address).join(' ; ')}"`,
-      `"${c.phone || ''}"`,
-      `"${c.contactName || ''}"`,
-      c.socials.linkedin || "",
-      c.socials.facebook || "",
-      c.socials.instagram || "",
-      c.website || "",
-      c.city,
-      c.sector,
+      escapeCsv(c.name),
+      escapeCsv(c.emails.map(e => e.address).join(' ; ')),
+      escapeCsv(c.phone),
+      escapeCsv(c.contactName),
+      escapeCsv(c.socials.linkedin),
+      escapeCsv(c.socials.facebook),
+      escapeCsv(c.socials.instagram),
+      escapeCsv(c.website), // Le site avec le # sera maintenant bien géré
+      escapeCsv(c.city),
+      escapeCsv(c.sector),
       c.qualityScore
     ]);
     
-    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" 
-      + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    // Construction de la chaîne CSV
+    const csvString = [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
     
-    const encodedUri = encodeURI(csvContent);
+    // CORRECTION CRITIQUE : Utilisation de encodeURIComponent pour le contenu
+    // Cela permet de passer les caractères spéciaux comme #, ?, & sans couper le téléchargement
+    const encodedUri = "data:text/csv;charset=utf-8,\uFEFF" + encodeURIComponent(csvString);
+    
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `export_leads_social_${new Date().toISOString().slice(0,10)}.csv`);
+    link.setAttribute("download", `export_leads_${new Date().toISOString().slice(0,10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
