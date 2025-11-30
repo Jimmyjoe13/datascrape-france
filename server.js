@@ -32,22 +32,44 @@ const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
 // Fonction 1 : Scroller Maps
 async function autoScroll(page, maxResults) {
-    return await page.evaluate(async (maxResults) => {
+    await page.evaluate(async (maxResults) => {
         const wrapper = document.querySelector('div[role="feed"]');
         if (!wrapper) return;
-        await new Promise((resolve) => {
+
+        await new Promise((resolve, reject) => {
             var totalHeight = 0;
             var distance = 1000;
+            var attempts = 0; // Compteur pour insister si on touche le fond
+
             var timer = setInterval(async () => {
                 var scrollHeight = wrapper.scrollHeight;
                 wrapper.scrollBy(0, distance);
                 totalHeight += distance;
+
                 const items = document.querySelectorAll('div[role="article"]');
-                if (items.length >= maxResults || totalHeight >= scrollHeight) {
+
+                // Cas 1 : On a atteint le nombre cible
+                if (items.length >= maxResults) {
+                    console.log(`Scroll terminé : ${items.length} trouvés`);
                     clearInterval(timer);
                     resolve();
+                    return;
                 }
-            }, 1000);
+
+                // Cas 2 : On est en bas de page
+                if (wrapper.scrollTop + wrapper.clientHeight >= scrollHeight) {
+                    attempts++;
+                    
+                    // On attend un peu plus longtemps si on est en bas
+                    if (attempts > 5) { // Si après 5 essais (environ 7-8 sec) rien ne charge
+                        console.log("Fin de liste détectée ou chargement bloqué.");
+                        clearInterval(timer);
+                        resolve();
+                    }
+                } else {
+                    attempts = 0; // On a réussi à descendre, on reset le compteur
+                }
+            }, 1500); // On ralentit un peu (1.5s) pour laisser le temps au DOM de charger
         });
     }, maxResults);
 }
@@ -182,6 +204,9 @@ app.post('/api/scrape', async (req, res) => {
                 return link ? link.href : null;
             }).filter(l => l !== null);
         }, safeMaxResults);
+
+        // AJOUT MENTOR : Log de vérification
+        console.log(`[DEBUG] Liens trouvés après scroll : ${placesLinks.length} / ${safeMaxResults} demandés`);
 
         const enrichedResults = [];
 
