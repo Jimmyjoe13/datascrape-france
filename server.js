@@ -1,3 +1,5 @@
+import 'dotenv/config'; // Charge les variables du .env
+import { createClient } from '@supabase/supabase-js';
 import express from 'express';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
@@ -7,6 +9,10 @@ import cors from 'cors';
 import axios from 'axios';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+// Initialisation Supabase
+// Assure-toi que ces variables existent dans ton fichier .env
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // Nécessaire pour gérer les chemins en module ES
 const __filename = fileURLToPath(import.meta.url);
@@ -21,8 +27,7 @@ const app = express();
 app.use(cors()); // CORS simplifié pour le déploiement
 app.use(express.json());
 
-// --- SERVIR LE FRONTEND (AJOUT IMPORTANT) ---
-// Le serveur va distribuer les fichiers du dossier 'dist' (le site React construit)
+// --- SERVIR LE FRONTEND ---
 app.use(express.static(path.join(__dirname, 'dist')));
 
 const PORT = process.env.PORT || 3001;
@@ -30,7 +35,7 @@ const PORT = process.env.PORT || 3001;
 // --- FONCTIONS UTILITAIRES ---
 const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
-// Fonction 1 : Scroller Maps
+// Fonction 1 : Scroller Maps (Version Robuste)
 async function autoScroll(page, maxResults) {
     await page.evaluate(async (maxResults) => {
         const wrapper = document.querySelector('div[role="feed"]');
@@ -39,7 +44,7 @@ async function autoScroll(page, maxResults) {
         await new Promise((resolve, reject) => {
             var totalHeight = 0;
             var distance = 1000;
-            var attempts = 0; // Compteur pour insister si on touche le fond
+            var attempts = 0;
 
             var timer = setInterval(async () => {
                 var scrollHeight = wrapper.scrollHeight;
@@ -59,17 +64,16 @@ async function autoScroll(page, maxResults) {
                 // Cas 2 : On est en bas de page
                 if (wrapper.scrollTop + wrapper.clientHeight >= scrollHeight) {
                     attempts++;
-                    
                     // On attend un peu plus longtemps si on est en bas
-                    if (attempts > 5) { // Si après 5 essais (environ 7-8 sec) rien ne charge
+                    if (attempts > 5) {
                         console.log("Fin de liste détectée ou chargement bloqué.");
                         clearInterval(timer);
                         resolve();
                     }
                 } else {
-                    attempts = 0; // On a réussi à descendre, on reset le compteur
+                    attempts = 0;
                 }
-            }, 1500); // On ralentit un peu (1.5s) pour laisser le temps au DOM de charger
+            }, 1500);
         });
     }, maxResults);
 }
@@ -84,7 +88,6 @@ async function scrapeCompanyWebsite(browser, url) {
         await page.setUserAgent(new UserAgent({ deviceCategory: 'desktop' }).toString());
         await page.setViewport({ width: 1366, height: 768 });
         
-        // Timeout réduit pour la production
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
 
         const scanResult = await page.evaluate(() => {
@@ -112,7 +115,6 @@ async function scrapeCompanyWebsite(browser, url) {
 
         let emails = [...new Set(scanResult.emails)];
         
-        // Filtrage basique
         emails = emails.filter(e => {
             const isImage = e.match(/\.(png|jpg|jpeg|gif|css|js|webp|svg|woff|ttf)$/i);
             const isJunk = e.includes('sentry') || e.includes('noreply') || e.includes('domain') || e.includes('example') || e.includes('wixpress');
@@ -158,7 +160,6 @@ async function getLegalInfo(name, city) {
 app.post('/api/scrape', async (req, res) => {
     const { sector, location, maxResults = 5 } = req.body;
     
-    // MODIFICATION MENTOR : On augmente la limite à 100 ou on prend la valeur demandée
     const safeMaxResults = Math.min(maxResults, 100); 
 
     console.log(`[SCRAPER] 🚀 ${sector} à ${location} (${safeMaxResults} max)`);
@@ -167,7 +168,6 @@ app.post('/api/scrape', async (req, res) => {
     try {
         browser = await puppeteer.launch({
             headless: "new",
-            // Arguments vitaux pour faire tourner Chrome sur Docker/Render
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
@@ -205,15 +205,13 @@ app.post('/api/scrape', async (req, res) => {
             }).filter(l => l !== null);
         }, safeMaxResults);
 
-        // AJOUT MENTOR : Log de vérification
         console.log(`[DEBUG] Liens trouvés après scroll : ${placesLinks.length} / ${safeMaxResults} demandés`);
 
         const enrichedResults = [];
 
-        // On traite par lots de 5 onglets en même temps pour aller plus vite
+        // Traitement parallèle par lots de 5
         const CONCURRENCY_LIMIT = 5; 
         
-        // Fonction helper pour diviser le tableau en morceaux
         const chunk = (arr, size) => Array.from({ length: Math.ceil(arr.length / size) }, (v, i) =>
             arr.slice(i * size, i * size + size)
         );
@@ -221,12 +219,10 @@ app.post('/api/scrape', async (req, res) => {
         const linkChunks = chunk(placesLinks, CONCURRENCY_LIMIT);
 
         for (const chunk of linkChunks) {
-            // On lance 5 promesses en même temps
             const promises = chunk.map(async (link) => {
                 let pageTab;
                 try {
                     pageTab = await browser.newPage();
-                    // Bloquer les images pour aller plus vite
                     await pageTab.setRequestInterception(true);
                     pageTab.on('request', (req) => {
                         if (['image', 'stylesheet', 'font'].includes(req.resourceType())) req.abort();
@@ -244,14 +240,27 @@ app.post('/api/scrape', async (req, res) => {
                         return { name, website: websiteBtn ? websiteBtn.href : null, phone };
                     });
 
+                    // --- 1. VERIFICATION SUPABASE (Anti-Doublon) ---
+                    const { data: existingLead } = await supabase
+                        .from('leads')
+                        .select('id')
+                        .ilike('name', data.name)
+                        .ilike('city', location)
+                        .maybeSingle();
+
+                    if (existingLead) {
+                        console.log(`[SKIP] Doublon détecté en base : ${data.name}`);
+                        await pageTab.close();
+                        return null;
+                    }
+
+                    // --- 2. ENRICHISSEMENT ---
                     let companyEmails = [];
                     let companySocials = {};
                     let legalInfo = null;
 
                     if (data.website) {
-                        // Note: scrapeCompanyWebsite doit utiliser browser, pas pageTab
-                        // Attention: ta fonction scrapeCompanyWebsite ouvre un NOUVEL onglet, 
-                        // c'est correct mais assure-toi qu'elle gère bien la fermeture.
+                        // Attention : scrapeCompanyWebsite utilise le 'browser' principal pour ouvrir un nouvel onglet
                         const webData = await scrapeCompanyWebsite(browser, data.website);
                         companyEmails = webData.emails;
                         companySocials = webData.socials;
@@ -266,9 +275,8 @@ app.post('/api/scrape', async (req, res) => {
                     if (legalInfo && legalInfo.dirigeant) score += 10;
                     if (Object.keys(companySocials).length > 0) score += 10;
 
-                    await pageTab.close(); // Important de fermer l'onglet ici
-
-                    return {
+                    // --- 3. CONSTRUCTION DE L'OBJET FINAL ---
+                    const finalData = {
                         id: `SOC-${Date.now()}-${Math.random()}`,
                         name: legalInfo?.legalName || data.name,
                         sector: sector,
@@ -286,6 +294,38 @@ app.post('/api/scrape', async (req, res) => {
                         qualityScore: Math.min(100, score)
                     };
 
+                    // --- 4. SAUVEGARDE SUPABASE ---
+                    // On prend le premier email trouvé pour la colonne 'email' (si existant)
+                    const primaryEmail = (finalData.emails && finalData.emails.length > 0) 
+                        ? finalData.emails[0].address 
+                        : null;
+
+                    const { error: insertError } = await supabase
+                        .from('leads')
+                        .insert([{
+                            name: finalData.name,
+                            sector: sector,
+                            city: location,
+                            address: finalData.address,
+                            website: finalData.website,
+                            email: primaryEmail, 
+                            phone: finalData.phone,
+                            contact_name: finalData.contactName,
+                            siren: finalData.siren,
+                            socials: finalData.socials, // JSONB
+                            quality_score: finalData.qualityScore
+                        }]);
+                    
+                    if (insertError) {
+                        // On ignore l'erreur si c'est un doublon qui aurait échappé au check initial
+                        if (!insertError.message.includes('unique constraint')) {
+                            console.error(`Erreur sauvegarde Supabase (${finalData.name}):`, insertError.message);
+                        }
+                    }
+
+                    await pageTab.close(); 
+                    return finalData;
+
                 } catch (err) {
                     console.error(`Skipped: ${err.message}`);
                     if (pageTab && !pageTab.isClosed()) await pageTab.close();
@@ -293,12 +333,9 @@ app.post('/api/scrape', async (req, res) => {
                 }
             });
 
-            // On attend que les 5 finissent avant de passer aux 5 suivants
             const chunkResults = await Promise.all(promises);
-            // On ajoute les résultats non nuls
             enrichedResults.push(...chunkResults.filter(r => r !== null));
             
-            // Petite pause pour respirer entre les lots
             await delay(2000);
         }
 
@@ -312,8 +349,6 @@ app.post('/api/scrape', async (req, res) => {
     }
 });
 
-// --- ROUTE PAR DÉFAUT POUR REACT ---
-// Toutes les requêtes qui ne sont pas /api/scrape sont renvoyées vers l'index.html de React
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
