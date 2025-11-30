@@ -6,9 +6,9 @@ const API_URL = import.meta.env.PROD ? '/api' : 'http://localhost:3001/api';
 
 export const scrapeData = async (params: SearchParams): Promise<CompanyData[]> => {
   try {
-    // Timeout de 5 minutes
+    // MODIFICATION MENTOR : Augmentation du timeout à 10 minutes (600000 ms)
     const response = await axios.post<CompanyData[]>(`${API_URL}/scrape`, params, {
-      timeout: 300000, 
+      timeout: 600000, // Passage de 300000 à 600000
       headers: {
         'Content-Type': 'application/json'
       }

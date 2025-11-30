@@ -136,8 +136,8 @@ async function getLegalInfo(name, city) {
 app.post('/api/scrape', async (req, res) => {
     const { sector, location, maxResults = 5 } = req.body;
     
-    // Limite stricte pour la démo/prod gratuite
-    const safeMaxResults = Math.min(maxResults, 15); 
+    // MODIFICATION MENTOR : On augmente la limite à 100 ou on prend la valeur demandée
+    const safeMaxResults = Math.min(maxResults, 100); 
 
     console.log(`[SCRAPER] 🚀 ${sector} à ${location} (${safeMaxResults} max)`);
 
@@ -185,58 +185,96 @@ app.post('/api/scrape', async (req, res) => {
 
         const enrichedResults = [];
 
-        for (const link of placesLinks) {
-            try {
-                await page.goto(link, { waitUntil: 'domcontentloaded', timeout: 20000 });
-                const data = await page.evaluate(() => {
-                    const name = document.querySelector('h1')?.innerText || "Inconnu";
-                    const websiteBtn = document.querySelector('a[data-item-id="authority"]');
-                    const phoneBtn = document.querySelector('button[data-item-id^="phone:"]');
-                    let phone = phoneBtn ? phoneBtn.getAttribute('aria-label') : null;
-                    if (phone) phone = phone.replace('Téléphone: ', '').trim();
-                    return { name, website: websiteBtn ? websiteBtn.href : null, phone };
-                });
+        // On traite par lots de 5 onglets en même temps pour aller plus vite
+        const CONCURRENCY_LIMIT = 5; 
+        
+        // Fonction helper pour diviser le tableau en morceaux
+        const chunk = (arr, size) => Array.from({ length: Math.ceil(arr.length / size) }, (v, i) =>
+            arr.slice(i * size, i * size + size)
+        );
 
-                let companyEmails = [];
-                let companySocials = {};
-                let legalInfo = null;
+        const linkChunks = chunk(placesLinks, CONCURRENCY_LIMIT);
 
-                if (data.website) {
-                    const webData = await scrapeCompanyWebsite(browser, data.website);
-                    companyEmails = webData.emails;
-                    companySocials = webData.socials;
+        for (const chunk of linkChunks) {
+            // On lance 5 promesses en même temps
+            const promises = chunk.map(async (link) => {
+                let pageTab;
+                try {
+                    pageTab = await browser.newPage();
+                    // Bloquer les images pour aller plus vite
+                    await pageTab.setRequestInterception(true);
+                    pageTab.on('request', (req) => {
+                        if (['image', 'stylesheet', 'font'].includes(req.resourceType())) req.abort();
+                        else req.continue();
+                    });
+
+                    await pageTab.goto(link, { waitUntil: 'domcontentloaded', timeout: 20000 });
+                    
+                    const data = await pageTab.evaluate(() => {
+                        const name = document.querySelector('h1')?.innerText || "Inconnu";
+                        const websiteBtn = document.querySelector('a[data-item-id="authority"]');
+                        const phoneBtn = document.querySelector('button[data-item-id^="phone:"]');
+                        let phone = phoneBtn ? phoneBtn.getAttribute('aria-label') : null;
+                        if (phone) phone = phone.replace('Téléphone: ', '').trim();
+                        return { name, website: websiteBtn ? websiteBtn.href : null, phone };
+                    });
+
+                    let companyEmails = [];
+                    let companySocials = {};
+                    let legalInfo = null;
+
+                    if (data.website) {
+                        // Note: scrapeCompanyWebsite doit utiliser browser, pas pageTab
+                        // Attention: ta fonction scrapeCompanyWebsite ouvre un NOUVEL onglet, 
+                        // c'est correct mais assure-toi qu'elle gère bien la fermeture.
+                        const webData = await scrapeCompanyWebsite(browser, data.website);
+                        companyEmails = webData.emails;
+                        companySocials = webData.socials;
+                    }
+
+                    legalInfo = await getLegalInfo(data.name, location);
+
+                    let score = 30;
+                    if (data.phone) score += 10;
+                    if (data.website) score += 10;
+                    if (companyEmails.length > 0) score += 30;
+                    if (legalInfo && legalInfo.dirigeant) score += 10;
+                    if (Object.keys(companySocials).length > 0) score += 10;
+
+                    await pageTab.close(); // Important de fermer l'onglet ici
+
+                    return {
+                        id: `SOC-${Date.now()}-${Math.random()}`,
+                        name: legalInfo?.legalName || data.name,
+                        sector: sector,
+                        city: location,
+                        address: legalInfo?.address || location,
+                        website: data.website,
+                        emails: companyEmails.map(e => ({ address: e, type: 'Web', confidence: 90 })),
+                        phone: data.phone,
+                        socials: companySocials,
+                        contactName: legalInfo?.dirigeant, 
+                        contactRole: "Dirigeant",
+                        siren: legalInfo?.siren,
+                        collectedAt: new Date().toISOString(),
+                        emailStatus: companyEmails.length > 0 ? 'Risky' : 'Unknown',
+                        qualityScore: Math.min(100, score)
+                    };
+
+                } catch (err) {
+                    console.error(`Skipped: ${err.message}`);
+                    if (pageTab && !pageTab.isClosed()) await pageTab.close();
+                    return null;
                 }
+            });
 
-                legalInfo = await getLegalInfo(data.name, location);
-
-                let score = 30;
-                if (data.phone) score += 10;
-                if (data.website) score += 10;
-                if (companyEmails.length > 0) score += 30;
-                if (legalInfo && legalInfo.dirigeant) score += 10;
-                if (Object.keys(companySocials).length > 0) score += 10;
-
-                enrichedResults.push({
-                    id: `SOC-${Date.now()}-${Math.random()}`,
-                    name: legalInfo?.legalName || data.name,
-                    sector: sector,
-                    city: location,
-                    address: legalInfo?.address || location,
-                    website: data.website,
-                    emails: companyEmails.map(e => ({ address: e, type: 'Web', confidence: 90 })),
-                    phone: data.phone,
-                    socials: companySocials,
-                    contactName: legalInfo?.dirigeant, 
-                    contactRole: "Dirigeant",
-                    siren: legalInfo?.siren,
-                    collectedAt: new Date().toISOString(),
-                    emailStatus: companyEmails.length > 0 ? 'Risky' : 'Unknown',
-                    qualityScore: Math.min(100, score)
-                });
-
-            } catch (err) {
-                console.error(`Skipped: ${err.message}`);
-            }
+            // On attend que les 5 finissent avant de passer aux 5 suivants
+            const chunkResults = await Promise.all(promises);
+            // On ajoute les résultats non nuls
+            enrichedResults.push(...chunkResults.filter(r => r !== null));
+            
+            // Petite pause pour respirer entre les lots
+            await delay(2000);
         }
 
         await browser.close();
