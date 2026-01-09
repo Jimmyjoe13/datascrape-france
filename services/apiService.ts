@@ -1,14 +1,20 @@
 import { SearchParams, CompanyData } from '../types';
 import axios from 'axios';
 
-// En production, on utilise l'URL relative. En dev, on garde localhost.
-const API_URL = import.meta.env.PROD ? '/api' : 'http://localhost:3001/api';
+// Détection de l'environnement via la présence de PROD dans import.meta
+// @ts-ignore - Vite injecte ces types à la compilation
+const isProd = typeof import.meta !== 'undefined' && (import.meta as any).env?.PROD;
+const API_URL = isProd ? '/api' : 'http://localhost:3001/api';
 
+/**
+ * Appelle le backend pour lancer le scraping de l'annuaire
+ * @param params - Paramètres de recherche (sector, location, maxResults)
+ * @returns Liste des leads extraits
+ */
 export const scrapeData = async (params: SearchParams): Promise<CompanyData[]> => {
   try {
-    // MODIFICATION MENTOR : Augmentation du timeout à 10 minutes (600000 ms)
     const response = await axios.post<CompanyData[]>(`${API_URL}/scrape`, params, {
-      timeout: 600000, // Passage de 300000 à 600000
+      timeout: 600000, // 10 minutes max pour le scraping complet
       headers: {
         'Content-Type': 'application/json'
       }
@@ -20,10 +26,21 @@ export const scrapeData = async (params: SearchParams): Promise<CompanyData[]> =
       throw new Error("Format de réponse invalide");
     }
   } catch (error: any) {
-    console.error("API Error:", error);
+    console.error("[API Error]:", error);
+    
     if (error.code === 'ECONNABORTED') {
-      throw new Error("Le scraping a pris trop de temps (Timeout > 5min). Essayez de réduire le nombre de résultats.");
+      throw new Error("Le scraping a pris trop de temps (Timeout > 10min). Réduisez le nombre de résultats.");
     }
-    throw new Error(error.response?.data?.details || error.message || "Erreur de connexion au serveur de scraping");
+    
+    if (error.response?.status === 400) {
+      throw new Error(error.response.data?.error || "Paramètres invalides");
+    }
+    
+    throw new Error(
+      error.response?.data?.details || 
+      error.response?.data?.error ||
+      error.message || 
+      "Erreur de connexion au serveur de scraping"
+    );
   }
 };

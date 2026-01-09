@@ -1,21 +1,22 @@
+// Catégories professionnelles de l'annuaire experts-du-patrimoine.fr
 export enum Sector {
-  RESTAURANTS = "Restaurants",
-  HOTELS = "Hôtels",
-  LEGAL = "Avocats/Juridique",
-  DESIGN = "Agences Design",
-  CRAFTS = "Artisans",
-  RETAIL = "Commerces",
-  HEALTH = "Santé",
-  REAL_ESTATE = "Immobilier",
-  TECH = "Tech/Startups",
-  OTHER = "Autre"
+  CGP = "CGP",
+  AVOCAT = "Avocat",
+  NOTAIRE = "Notaire",
+  AGENT_ASSURANCE = "Agent d'assurance",
+  BANQUE_PRIVEE = "Banque privée",
+  COURTIER = "Courtier",
+  FAMILY_OFFICE = "Family office",
+  IMMOBILIER = "Professionnel immobilier",
+  SOCIETE_GESTION = "Société de gestion",
+  AUTRE = "Autre",
 }
 
 export enum EmailStatus {
   VALID = "Valid",
   RISKY = "Risky",
   INVALID = "Invalid",
-  UNKNOWN = "Unknown"
+  UNKNOWN = "Unknown",
 }
 
 export interface CompanyData {
@@ -25,29 +26,31 @@ export interface CompanyData {
   sector: string;
   address: string;
   city: string;
+  postalCode?: string;
   website?: string;
   emails: Array<{
     address: string;
-    source: string; // 'Web', 'Pappers', 'LinkedIn'
-    type: 'Generic' | 'Personal' | 'Pattern';
+    source: string;
+    type: "Generic" | "Personal" | "Pattern";
     confidence: number;
   }>;
   phone?: string;
   contactName?: string;
   contactRole?: string;
+  expertises?: string[]; // Domaines d'expertise du professionnel
   socials: {
     linkedin?: string;
     facebook?: string;
     instagram?: string;
   };
   collectedAt: string;
-  qualityScore: number; // 0-100
+  qualityScore: number;
   emailStatus: EmailStatus;
 }
 
 export interface SearchParams {
   sector: string;
-  location: string;
+  location: string; // Code département (ex: "75", "69") ou vide pour toute la France
   maxResults: number;
   customKeywords?: string;
 }

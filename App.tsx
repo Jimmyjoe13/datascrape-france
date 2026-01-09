@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { LayoutDashboard, Database, Settings, Search, MapPin, Loader2, Zap, History, Save, AlertTriangle } from 'lucide-react';
 import { Sector, SearchParams, CompanyData, ScrapingSession } from './types';
-import { SECTORS, FRENCH_CITIES } from './constants';
-import { scrapeData } from './services/apiService'; // Using Real API Service
+import { SECTORS, FRENCH_DEPARTMENTS } from './constants';
+import { scrapeData } from './services/apiService';
 import Dashboard from './components/Dashboard';
 import ResultsTable from './components/ResultsTable';
 
@@ -16,8 +16,8 @@ const App: React.FC = () => {
   // Search State
   const [searchParams, setSearchParams] = useState<SearchParams>({
     sector: SECTORS[0],
-    location: FRENCH_CITIES[0],
-    maxResults: 10, // Default lowered for real scraping performance
+    location: FRENCH_DEPARTMENTS[0].code,
+    maxResults: 10,
     customKeywords: ''
   });
 
@@ -44,19 +44,19 @@ const App: React.FC = () => {
     setErrorMsg(null);
     setCurrentResults([]);
     setActiveTab('scraper');
-    setLoadingStep('Initialisation du moteur de recherche (Puppeteer)...');
+    setLoadingStep('Connexion à l\'annuaire experts-du-patrimoine.fr...');
 
     try {
-      // Simulate steps for UX while waiting for the single long promise
+      // Simulation des étapes pour l'UX pendant l'attente
       const stepInterval = setInterval(() => {
         setLoadingStep(prev => {
-           if(prev.includes('Initialisation')) return 'Exploration de Google Search...';
-           if(prev.includes('Google')) return 'Visite des sites web détectés...';
-           if(prev.includes('Visite')) return 'Extraction des emails et contacts...';
-           if(prev.includes('Extraction')) return 'Vérification DNS et enrichissement...';
+           if(prev.includes('Connexion')) return 'Exploration de la catégorie...';
+           if(prev.includes('catégorie')) return 'Extraction des profils...';
+           if(prev.includes('profils')) return 'Enrichissement via API Gouv.fr...';
+           if(prev.includes('Enrichissement')) return 'Vérification des doublons...';
            return prev;
         });
-      }, 4000);
+      }, 5000);
 
       const results = await scrapeData(searchParams);
       
@@ -157,14 +157,14 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="flex-1 space-y-2 w-full">
-                    <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Localisation</label>
+                    <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Département</label>
                     <div className="relative">
                          <select 
                             value={searchParams.location}
                             onChange={(e) => setSearchParams({...searchParams, location: e.target.value})}
                             className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg pl-4 pr-10 py-3 appearance-none focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
                         >
-                            {FRENCH_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+                            {FRENCH_DEPARTMENTS.map(d => <option key={d.code} value={d.code}>{d.label}</option>)}
                         </select>
                         <MapPin className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" size={18} />
                     </div>
@@ -175,7 +175,7 @@ const App: React.FC = () => {
                     <input 
                         type="number" 
                         min="5" 
-                        max="50" // Limited for real performance without proxy pool
+                        max="100"
                         value={searchParams.maxResults}
                         onChange={(e) => setSearchParams({...searchParams, maxResults: parseInt(e.target.value)})}
                         className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg px-4 py-3 focus:ring-2 focus:ring-primary-500 outline-none transition-all"
@@ -226,11 +226,11 @@ const App: React.FC = () => {
                                     <div className="w-24 h-24 bg-slate-800 rounded-full flex items-center justify-center mb-6">
                                         <Search size={40} className="text-slate-600" />
                                     </div>
-                                    <h3 className="text-xl font-medium text-white mb-2">Prêt à scraper (Mode Réel)</h3>
+                                    <h3 className="text-xl font-medium text-white mb-2">Annuaire Experts du Patrimoine</h3>
                                     <p className="max-w-md text-center text-sm">
-                                        Le mode réel utilise un backend Node.js avec Puppeteer. 
+                                        Scraping de l'annuaire experts-du-patrimoine.fr. 
                                         Assurez-vous d'avoir lancé <code className="bg-slate-800 px-1 rounded text-primary-400">npm run server</code>.
-                                        Le temps de traitement peut être de 1 à 3 minutes.
+                                        Temps estimé : 2-5 min selon le nombre de résultats.
                                     </p>
                                 </div>
                             )
